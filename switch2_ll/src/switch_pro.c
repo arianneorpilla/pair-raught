@@ -131,21 +131,29 @@ uint32_t switch_pro_buttons(const struct puck_input *in)
 		b &= ~(uint32_t)TB_Y;
 	}
 
-	/* Face buttons, straight through: the Steam Controller's A is the
-	 * console's A. Swapping A/B and X/Y for the Nintendo layout would belong
-	 * with the other mappings on the config page, which does not offer it.
+	/*
+	 * Face buttons BY POSITION, not by label. The Steam Controller uses the
+	 * Xbox layout (A bottom, B right, X left, Y top) and the Pro Controller
+	 * the Nintendo one (B bottom, A right, Y left, X top). Passing labels
+	 * straight through put confirm on the bottom button and swapped X and Y
+	 * as well, and the console's own A/B swap setting cannot fix X/Y. By
+	 * position, each button does what the same button on a Pro Controller
+	 * does, so the console needs no swap.
+	 *
+	 *   Steam A (bottom) -> B     Steam B (right) -> A
+	 *   Steam X (left)   -> Y     Steam Y (top)   -> X
 	 */
 	if (b & TB_A) {
-		jc |= JC_BTN_A;
-	}
-	if (b & TB_B) {
 		jc |= JC_BTN_B;
 	}
+	if (b & TB_B) {
+		jc |= JC_BTN_A;
+	}
 	if (b & TB_X) {
-		jc |= JC_BTN_X;
+		jc |= JC_BTN_Y;
 	}
 	if (b & TB_Y) {
-		jc |= JC_BTN_Y;
+		jc |= JC_BTN_X;
 	}
 
 	/* Shoulders. */
