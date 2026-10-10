@@ -8,6 +8,11 @@
 #
 #   NCS_WORKSPACE=/path/to/ncs/v3.4.0 ./build.sh
 #
+# Without nrfutil, the build runs west directly. That needs an SDK fetched with
+# west (west init -m https://github.com/nrfconnect/sdk-nrf --mr v3.4.0), its
+# Python requirements, and the Zephyr SDK toolchain that zephyr/SDK_VERSION
+# names, found through ZEPHYR_SDK_INSTALL_DIR or CMake's package registry.
+#
 # Why the sources are staged beside the SDK: west computes the source directory
 # relative to the workspace, and on Windows a relative path cannot cross drive
 # letters, so a repo on a different drive from the SDK fails before anything is
@@ -40,12 +45,19 @@ if [ ! -d "${WORKSPACE}/zephyr" ]; then
 	echo "install it there, or set NCS_WORKSPACE to where it is" >&2
 	exit 1
 fi
-for tool in nrfutil xxd; do
-	if ! command -v "$tool" >/dev/null 2>&1; then
-		echo "required tool not found on PATH: $tool" >&2
-		exit 1
-	fi
-done
+if ! command -v xxd >/dev/null 2>&1; then
+	echo "required tool not found on PATH: xxd" >&2
+	exit 1
+fi
+if command -v nrfutil >/dev/null 2>&1; then
+	USE_NRFUTIL=1
+elif command -v west >/dev/null 2>&1; then
+	USE_NRFUTIL=0
+	echo "nrfutil not found: building with west directly"
+else
+	echo "required tool not found on PATH: nrfutil (or west)" >&2
+	exit 1
+fi
 
 # Embed the config page as a C array.
 #
@@ -85,8 +97,13 @@ cp -r "$REPO_APP"/CMakeLists.txt "$REPO_APP"/prj.conf "$STAGE"/ 2>/dev/null || t
 [ -d "$REPO_APP/boards" ] && cp -r "$REPO_APP/boards" "$STAGE"/
 
 echo "building $APP for $BOARD against $WORKSPACE"
-nrfutil toolchain-manager launch --ncs-version "$NCS_VER" --chdir "$WORKSPACE" -- \
-	west build -b "$BOARD" -p always -d "${STAGE}/build" "$STAGE"
+if [ "$USE_NRFUTIL" = 1 ]; then
+	nrfutil toolchain-manager launch --ncs-version "$NCS_VER" --chdir "$WORKSPACE" -- \
+		west build -b "$BOARD" -p always -d "${STAGE}/build" "$STAGE"
+else
+	(cd "$WORKSPACE" && ZEPHYR_TOOLCHAIN_VARIANT="${ZEPHYR_TOOLCHAIN_VARIANT:-zephyr}" \
+		west build -b "$BOARD" -p always -d "${STAGE}/build" "$STAGE")
+fi
 
 # sysbuild nests each image under build/<app>/, so the UF2 is one level deeper
 # than a classic (non-sysbuild) Zephyr build would put it.
