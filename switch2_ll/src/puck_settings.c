@@ -35,9 +35,17 @@ void puck_settings_defaults(struct puck_settings *s)
 	s->unlock_mask = 0x0001;	/* B */
 	s->unlock_presses = 4;
 	s->unlock_delay = 60;		/* ~1.8 s */
-	s->unlock_down = 6;		/* ~180 ms, a human-length press */
-	s->unlock_up = 10;		/* ~300 ms between presses */
-	s->unlock_settle = 60;		/* ~1.8 s before releasing the link */
+
+	/*
+	 * Version 6 shortened these, which were 6, 10 and 60. A press of four
+	 * reports is still eight reports for the console to see at its 5 ms
+	 * link, and the settle only has to cover the last release reaching it.
+	 * Together they take about 2.2 s off a wake. The delay above is left
+	 * alone: it is the one value measured to fail when shortened.
+	 */
+	s->unlock_down = 4;		/* ~120 ms, a quick human press */
+	s->unlock_up = 5;		/* ~150 ms between presses */
+	s->unlock_settle = 15;		/* ~450 ms before releasing the link */
 	s->wake_giveup_s = 30;
 
 	/* The chime before a wake. On, because a hold that does something
@@ -60,7 +68,7 @@ void puck_settings_defaults(struct puck_settings *s)
 	 * RF for seconds, and an accidental brush would drop the controller.
 	 */
 	s->chord_hold_ms = 2000;
-	s->wake_hold_ms = 1000;
+	s->wake_hold_ms = 500;		/* 1000 before version 6 */
 
 	/* Mouse. Lower divisor is faster; friction is the coast after release
 	 * only, since the cursor tracks one-to-one while a finger is down.
@@ -130,6 +138,28 @@ void puck_settings_init(void)
 	}
 	if (stored.version < 5) {
 		g_cfg.mode_sound = 1;
+	}
+	if (stored.version < 6) {
+		/*
+		 * Version 6 changed some defaults. A field still holding the old
+		 * default takes the new one; a field someone set by hand keeps
+		 * their value.
+		 */
+		struct puck_settings d;
+
+		puck_settings_defaults(&d);
+		if (g_cfg.unlock_down == 6) {
+			g_cfg.unlock_down = d.unlock_down;
+		}
+		if (g_cfg.unlock_up == 10) {
+			g_cfg.unlock_up = d.unlock_up;
+		}
+		if (g_cfg.unlock_settle == 60) {
+			g_cfg.unlock_settle = d.unlock_settle;
+		}
+		if (g_cfg.wake_hold_ms == 1000) {
+			g_cfg.wake_hold_ms = d.wake_hold_ms;
+		}
 	}
 	g_cfg.version = PUCK_SETTINGS_VERSION;
 	printk("cfg: settings loaded (version %u)\n", stored.version);

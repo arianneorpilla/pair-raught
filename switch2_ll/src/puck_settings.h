@@ -12,8 +12,8 @@
  * building a puck for another person needs to set the wake behaviour and put it
  * in pairing mode without a terminal.
  *
- * Defaults are the values the firmware shipped with as constants, so an
- * unconfigured puck behaves exactly as before.
+ * Defaults started as the values the firmware shipped with as constants.
+ * Version 6 shortened the wake timing; see puck_settings_defaults().
  */
 
 #ifndef PUCK_SETTINGS_H
@@ -28,8 +28,11 @@
  * read back if its length matches. An older record reads 0 in a field added
  * since, so loading one sets those to their defaults rather than trusting the
  * zero.
+ *
+ * 6 added no fields. It shortened the press timing, the settle and the QAM
+ * hold, and moves a record still holding the old defaults onto the new ones.
  */
-#define PUCK_SETTINGS_VERSION 5
+#define PUCK_SETTINGS_VERSION 6
 
 struct puck_settings {
 	uint8_t version;
