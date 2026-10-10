@@ -213,7 +213,7 @@ void puck_settings_dump(void)
  *   $status           mode, bonds, console, USB identity
  *   $set <key> <val>  change one setting, applied and saved immediately
  *   $defaults         restore shipped defaults and save
- *   $action <what>    pair, factory, reboot, usbmode
+ *   $action <what>    pair, factory, reboot, usbmode, bootloader
  *   $chime <what>     the wake chime's notes; see cfg_chime()
  *
  * Values are decimal, or hex with a 0x prefix.
@@ -528,6 +528,22 @@ static void cfg_action(const char *what)
 		printk("%s\nok=rebooting\n%s\n", CFG_BEGIN, CFG_END);
 		k_sleep(K_MSEC(250));
 		sys_reboot(SYS_REBOOT_COLD);
+	} else if (!strcmp(what, "bootloader")) {
+		/*
+		 * Reboot into the UF2 bootloader to take a new firmware. Dongle
+		 * mode only: that is where the config page lives, and a Pro
+		 * Controller sitting in a console has no business dropping into
+		 * a drive. The 'b' console key still works in any mode.
+		 */
+		if (puck_usb_is_pro()) {
+			printk("%s\nerror=bootloader is only offered in dongle "
+			       "mode\n%s\n", CFG_BEGIN, CFG_END);
+			return;
+		}
+		printk("%s\nok=rebooting into the bootloader\n%s\n", CFG_BEGIN,
+		       CFG_END);
+		k_sleep(K_MSEC(250));
+		switch2_reboot_to_bootloader();
 	} else if (!strcmp(what, "usbmode")) {
 		uint8_t next = puck_usb_is_pro() ? PUCK_USB_MODE_DONGLE
 						 : PUCK_USB_MODE_PRO;

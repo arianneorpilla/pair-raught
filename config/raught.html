@@ -107,11 +107,14 @@
         <button data-action="pair">Pair with a console</button>
         <button data-action="usbmode" id="btn-usbmode">Switch USB mode</button>
         <button data-action="reboot">Reboot</button>
+        <button data-action="bootloader">Update firmware</button>
         <button data-action="factory">Factory reset</button>
       </div>
       <p class="why" style="margin:.8rem 0 0">Pairing reboots the puck into
         Bluetooth pairing mode; then hold <strong>Change Grip/Order</strong> on
-        the console. Each of these restarts the puck, so this page disconnects
+        the console. Update firmware restarts into the bootloader: a drive called
+        NICENANO appears, and you copy the new .uf2 onto it. Pairings and settings
+        are kept. Each of these restarts the puck, so this page disconnects
         afterwards.</p>
     </section>
 
@@ -908,6 +911,9 @@
       pair: 'Reboot into pairing mode and register with a console?',
       usbmode: 'Switch USB mode and reboot?',
       reboot: 'Reboot the puck?',
+      bootloader: 'Restart into the bootloader to flash new firmware?\n\n' +
+                  'A drive called NICENANO appears. Copy the new .uf2 onto it. ' +
+                  'Pairings and settings are kept.',
       factory: 'Erase everything the puck remembers?\n\nThe paired controller, the ' +
                'registered console, all settings and the motion calibration. ' +
                'You will have to pair again from scratch.',

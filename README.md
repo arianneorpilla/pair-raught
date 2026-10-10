@@ -144,8 +144,12 @@ A **fast pulse** means an application is running and faulting, which is covered 
 <details>
 <summary><b>Reflashing</b></summary>
 
-The same three steps. Reset the board twice as above, the bootloader drive comes back, and you copy the
-new `switch2_ll.uf2` onto it.
+With the puck in dongle mode, open the config page and press **Update firmware**. The puck restarts into
+its bootloader, the `NICENANO` drive appears, and you copy the new `switch2_ll.uf2` onto it. No reset
+contacts needed.
+
+Otherwise, the same three steps as flashing. Reset the board twice as above, the bootloader drive comes
+back, and you copy the new `switch2_ll.uf2` onto it.
 
 </details>
 

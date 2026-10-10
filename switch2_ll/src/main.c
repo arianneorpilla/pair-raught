@@ -205,6 +205,11 @@ static void reboot_to_bootloader(void)
 	NVIC_SystemReset();
 }
 
+void switch2_reboot_to_bootloader(void)
+{
+	reboot_to_bootloader();
+}
+
 /*
  * Console reader. Its own thread because console_getchar() blocks.
  *

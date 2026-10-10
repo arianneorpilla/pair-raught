@@ -180,6 +180,11 @@ void switch2_usb_event(uint8_t type);
  */
 void switch2_wake_returned(int slot);
 
+/* Reboot into the UF2 bootloader, so a new firmware can be copied on. Stored
+ * pairings and settings are kept: the bootloader does not touch them.
+ */
+void switch2_reboot_to_bootloader(void);
+
 /*
  * Ask for a sleeping console to be woken. Held QAM triggers it.
  *
