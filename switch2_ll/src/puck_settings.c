@@ -17,6 +17,8 @@
 
 struct puck_settings g_cfg;
 
+static uint8_t pad_target_index(const char *name);
+
 void puck_settings_defaults(struct puck_settings *s)
 {
 	memset(s, 0, sizeof(*s));
@@ -91,8 +93,16 @@ void puck_settings_defaults(struct puck_settings *s)
 	s->col_grip_l[0] = s->col_grip_l[1] = s->col_grip_l[2] = 0x32;
 	s->col_grip_r[0] = s->col_grip_r[1] = s->col_grip_r[2] = 0x32;
 
-	/* Extra buttons start unmapped, which is what they have always been. */
-	s->map_l4 = s->map_r4 = s->map_l5 = s->map_r5 = s->map_qam = 0;
+	/*
+	 * Extra buttons, as OpenPuck maps them for a Switch: the upper paddles
+	 * are the bumpers, the lower ones the stick clicks, and QAM is Capture.
+	 * Unmapped before version 7.
+	 */
+	s->map_l4 = pad_target_index("l");
+	s->map_r4 = pad_target_index("r");
+	s->map_l5 = pad_target_index("lstick");
+	s->map_r5 = pad_target_index("rstick");
+	s->map_qam = pad_target_index("capture");
 }
 
 void puck_settings_init(void)
@@ -159,6 +169,29 @@ void puck_settings_init(void)
 		}
 		if (g_cfg.wake_hold_ms == 1000) {
 			g_cfg.wake_hold_ms = d.wake_hold_ms;
+		}
+	}
+	if (stored.version < 7) {
+		/* Version 7 mapped the extra buttons. One still unmapped takes
+		 * the new default; one someone mapped keeps their choice.
+		 */
+		struct puck_settings d;
+
+		puck_settings_defaults(&d);
+		if (!g_cfg.map_l4) {
+			g_cfg.map_l4 = d.map_l4;
+		}
+		if (!g_cfg.map_r4) {
+			g_cfg.map_r4 = d.map_r4;
+		}
+		if (!g_cfg.map_l5) {
+			g_cfg.map_l5 = d.map_l5;
+		}
+		if (!g_cfg.map_r5) {
+			g_cfg.map_r5 = d.map_r5;
+		}
+		if (!g_cfg.map_qam) {
+			g_cfg.map_qam = d.map_qam;
 		}
 	}
 	g_cfg.version = PUCK_SETTINGS_VERSION;
@@ -254,6 +287,16 @@ static const struct {
 };
 
 #define PAD_TARGET_MAX (ARRAY_SIZE(PAD_TARGETS) - 1)
+
+static uint8_t pad_target_index(const char *name)
+{
+	for (uint8_t i = 0; i < ARRAY_SIZE(PAD_TARGETS); i++) {
+		if (!strcmp(PAD_TARGETS[i].name, name)) {
+			return i;
+		}
+	}
+	return 0;
+}
 
 uint32_t puck_settings_pad_bit(uint8_t target)
 {

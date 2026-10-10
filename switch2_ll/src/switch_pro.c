@@ -211,10 +211,8 @@ uint32_t switch_pro_buttons(const struct puck_input *in)
 
 	/*
 	 * The extra buttons the Pro Controller does not have. Each carries a
-	 * configured target rather than a fixed one. They were left unmapped
-	 * until the config surface existed to choose, because an arbitrary
-	 * default is worse than nothing on a button someone may be resting a
-	 * finger on.
+	 * configured target rather than a fixed one. The defaults follow
+	 * OpenPuck: L4/R4 are L/R, L5/R5 the stick clicks, QAM is Capture.
 	 */
 	if (!back4) {
 		if (in->buttons & TB_L4) {

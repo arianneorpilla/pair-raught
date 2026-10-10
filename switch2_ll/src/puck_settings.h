@@ -31,8 +31,11 @@
  *
  * 6 added no fields. It shortened the press timing, the settle and the QAM
  * hold, and moves a record still holding the old defaults onto the new ones.
+ *
+ * 7 added no fields. It maps the back paddles and QAM by default, and fills
+ * any of them still unmapped in an older record.
  */
-#define PUCK_SETTINGS_VERSION 6
+#define PUCK_SETTINGS_VERSION 7
 
 struct puck_settings {
 	uint8_t version;
