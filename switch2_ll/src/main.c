@@ -1127,6 +1127,16 @@ void switch2_request_wake(int slot)
 		printk("wake: already on BLE, ignoring the macro\n");
 		return;
 	}
+	/*
+	 * Not while the console is already awake and reading this pad over USB.
+	 * There is nothing to wake, and a wake would take the controller off
+	 * RF for seconds in the middle of play. Once the console sleeps, the
+	 * bus suspends or the dock power-cycles the puck, and QAM works again.
+	 */
+	if (switch_pro_usb_console_active()) {
+		printk("wake: the console is awake and using this pad, ignoring\n");
+		return;
+	}
 	if (!g_have_host) {
 		printk("wake: no console stored, so there is nothing to wake --\n"
 		       "      register with one first ('p', then Change Grip/Order)\n");

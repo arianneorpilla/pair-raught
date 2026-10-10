@@ -19,6 +19,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/usb/class/usbd_hid.h>
+#include <zephyr/usb/usbd_msg.h>
 #include <zephyr/drivers/usb/usb_buf.h>
 #include <string.h>
 #include <errno.h>
@@ -772,12 +773,50 @@ static int pro_get_report(const struct device *dev, const uint8_t type,
 	return (int)len;
 }
 
+/*
+ * Whether the console is awake and reading this pad. An awake console polls
+ * the IN endpoint every few milliseconds, so input reports complete
+ * continuously; a sleeping one suspends the bus and nothing completes.
+ */
+#define CONSOLE_ACTIVE_MS 500u
+
+static volatile uint32_t g_last_done_ms;
+static volatile bool g_usb_suspended;
+
 static void pro_input_done(const struct device *dev,
 			   const uint8_t *const report)
 {
 	ARG_UNUSED(dev);
 	ARG_UNUSED(report);
 	g_tx_busy = false;
+	g_last_done_ms = k_uptime_get_32();
+}
+
+void switch_pro_usb_bus_event(uint8_t type)
+{
+	switch (type) {
+	case USBD_MSG_SUSPEND:
+	case USBD_MSG_VBUS_REMOVED:
+		g_usb_suspended = true;
+		break;
+	case USBD_MSG_RESUME:
+	case USBD_MSG_RESET:
+	case USBD_MSG_CONFIGURATION:
+		g_usb_suspended = false;
+		break;
+	default:
+		break;
+	}
+}
+
+bool switch_pro_usb_console_active(void)
+{
+	uint32_t last = g_last_done_ms;
+
+	if (!pro_dev || g_usb_suspended || g_report_mode != 0x30 || !last) {
+		return false;
+	}
+	return (k_uptime_get_32() - last) < CONSOLE_ACTIVE_MS;
 }
 
 static const struct hid_device_ops pro_ops = {

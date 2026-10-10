@@ -15,6 +15,7 @@
 #define SWITCH_PRO_USB_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* Nintendo Co., Ltd. / Pro Controller. The console checks this. */
 #define SWPRO_VID 0x057E
@@ -51,6 +52,17 @@ void switch_pro_usb_dump(void);
 /* Bytes written in the motion-calibration mirror; 0 means none stored. */
 /* Load the stored motion calibration. Call once, in any USB mode. */
 void switch_pro_usb_load_cal(void);
+
+/* A USB device message (usbd_msg_type), for tracking bus suspend. */
+void switch_pro_usb_bus_event(uint8_t type);
+
+/*
+ * True while the console is awake and streaming input from this Pro
+ * Controller: report mode 0x30 selected, the bus not suspended, and an input
+ * report taken within the last CONSOLE_ACTIVE_MS. The wake macro does nothing
+ * while this holds, because there is no sleeping console to wake.
+ */
+bool switch_pro_usb_console_active(void);
 
 unsigned switch_pro_usb_cal_bytes(void);
 

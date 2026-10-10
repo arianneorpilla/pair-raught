@@ -89,6 +89,7 @@ static void usb_msg_cb(struct usbd_context *const ctx,
 
 	if (msg->type <= USBD_MSG_CONFIGURATION) {
 		boot_record_event((uint8_t)msg->type);
+		switch_pro_usb_bus_event((uint8_t)msg->type);
 		switch2_usb_event((uint8_t)msg->type);
 	}
 }
