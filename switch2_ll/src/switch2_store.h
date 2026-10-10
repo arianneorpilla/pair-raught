@@ -163,4 +163,12 @@ bool switch2_store_load_settings(void *cfg, size_t len);
 int switch2_store_save_chime(int id, const void *chime, size_t len);
 bool switch2_store_load_chime(int id, void *chime, size_t len);
 
+/* The last wake's timing record (see puck_wake_timing.h). */
+int switch2_store_save_wake_timing(const void *rec, size_t len);
+bool switch2_store_load_wake_timing(void *rec, size_t len);
+
+/* The last three boots' USB and radio events (see puck_wake_timing.h). */
+int switch2_store_save_boot_records(const void *rec, size_t len);
+bool switch2_store_load_boot_records(void *rec, size_t len);
+
 #endif /* SWITCH2_STORE_H */

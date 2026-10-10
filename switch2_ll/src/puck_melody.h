@@ -44,7 +44,7 @@ void puck_haptic_stop(int slot, uint8_t haptic);
  * than a note: a note queued before the burst has gone out would overwrite it.
  */
 enum puck_chime_id {
-	PUCK_CHIME_WAKE,	/* QAM held, before the radio goes to BLE */
+	PUCK_CHIME_WAKE,	/* a wake has completed and RF is back */
 	PUCK_CHIME_DONGLE,	/* the mode chord, before rebooting as the dongle */
 	PUCK_CHIME_PRO,		/* the mode chord, before rebooting as Pro */
 	PUCK_CHIME_COUNT,

@@ -24,8 +24,9 @@ rumble.
 the trackpads. The puck hands its radio to BLE, wakes the console, and hands it straight back to RF.
 Waking is the point of the BLE support; it is not a general BLE controller mode.
 
-**Chimes on the controller.** A short melody plays before a wake, and another before the puck reboots into
-a different USB identity, so a button held for seconds is not answered with silence. They play through the
+**Chimes on the controller.** A tick answers the wake button, and a short melody plays once the console is
+awake and the controller works again. Another plays before the puck reboots into a different USB identity,
+so a button held for seconds is not answered with silence. They play through the
 controller's own haptics: every note's pitch, length and haptic, and the volume of all of them, are set on
 the config page, and each chime can be turned off.
 

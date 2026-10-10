@@ -50,6 +50,7 @@
 #include <hal/nrf_rtc.h>
 #include <hal/nrf_radio.h>
 #include <zephyr/sys/reboot.h>
+#include <zephyr/usb/usbd_msg.h>
 
 #include "switch2_gatt.h"
 #include "switch2_store.h"
@@ -63,6 +64,7 @@
 #include "puck_settings.h"
 #include "switch_pro_usb.h"
 #include "puck_melody.h"
+#include "puck_wake_timing.h"
 
 LOG_MODULE_REGISTER(s2ll, LOG_LEVEL_INF);
 
@@ -362,6 +364,10 @@ static void console_thread(void *a, void *b, void *c)
 		case 'W':
 			set_adv_mode(false);
 			break;
+		case 'l':
+		case 'L':
+			wake_timing_dump();
+			break;
 		case 'g':
 		case 'G':
 			switch2_gatt_dump();
@@ -484,7 +490,7 @@ static void console_thread(void *a, void *b, void *c)
 			       "  u cycle unlock button      m switch USB identity\n"
 			       "  r radio to RF              e radio to BLE\n"
 			       "  b bootloader drive         t tone test (T: rumble)\n"
-			       "  k play the wake chime\n"
+			       "  k play the wake chime      l last wake timing\n"
 			       "  g dump GATT   s dump RF/TX   i dump input\n"
 			       "  j dump Pro    c dump settings  ? this list\n");
 			break;
@@ -767,6 +773,8 @@ static void enter_rf_mode(void)
 	rf_link_init();
 	rf_link_set_active(true);
 	puck_trace_stage(TR_RF_UP);
+	wake_timing_mark(WT_RF_UP);
+	boot_record_event(BOOT_EV_RF_UP);
 	printk("  RF mode: NRF_RADIO is now ours. Press 'e' to take it back for BLE.\n");
 }
 
@@ -804,6 +812,8 @@ static void enter_ble_mode(void)
 	g_silent = false;
 	build_adv_data();
 	start_adv();
+	wake_timing_mark(WT_BLE_UP);
+	boot_record_event(BOOT_EV_BLE_UP);
 }
 
 /*
@@ -827,11 +837,16 @@ static void enter_ble_mode(void)
  * the console's 2 s supervision timeout, which is how long a link it never
  * acknowledges takes to be declared gone.
  */
-#define RF_HANDOVER_POLL_MS 20
+#define RF_HANDOVER_POLL_MS 5
 #define RF_HANDOVER_WAIT_MS 3000
 
 static bool g_handover_waiting;
 static uint32_t g_handover_since;
+
+/* A Pro Controller boot is waiting to hand over; see PRO_RF_SETTLE_MS. */
+static volatile bool g_pro_boot_pending;
+static volatile bool g_usb_bus_seen;
+static volatile bool g_usb_configured;
 
 static void to_rf_work_fn(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(g_to_rf_work, to_rf_work_fn);
@@ -839,6 +854,8 @@ static K_WORK_DELAYABLE_DEFINE(g_to_rf_work, to_rf_work_fn);
 static void to_rf_work_fn(struct k_work *work)
 {
 	ARG_UNUSED(work);
+
+	g_pro_boot_pending = false;
 
 	if (g_mode == MODE_RF) {
 		g_handover_waiting = false;
@@ -884,8 +901,53 @@ static void request_rf_mode(void)
  */
 /* Console never answered, come home. Configurable: g_cfg.wake_giveup_s. */
 
-/* Let USB settle before Pro Controller mode takes the radio to RF. */
-#define PRO_RF_DELAY_S 5
+/*
+ * PRO CONTROLLER BOOT: when to hand the radio to RF.
+ *
+ * This used to be a flat 5 s after the 8 s boot pause, so a Pro Controller
+ * puck had no controller input for about 13 s after power-on. The console cuts
+ * dock power briefly when it goes to sleep (see switch2_store.c), so that
+ * happened on every sleep, and a QAM wake attempted in that window did nothing.
+ *
+ * The delay exists because handing over while USB was still coming up broke
+ * the CDC console on a PC. So it follows the bus instead:
+ *
+ *   host configured the device   RF PRO_RF_SETTLE_MS later
+ *   bus active, not configured   RF PRO_RF_DELAY_S after the first bus reset,
+ *                                the old bound
+ *   no bus activity at all       RF after PRO_RF_NOHOST_MS. A sleeping console
+ *                                does not enumerate anything, so there is
+ *                                nothing to disturb
+ */
+#define PRO_RF_DELAY_S   5
+#define PRO_RF_SETTLE_MS 1000
+#define PRO_RF_NOHOST_MS 1500
+
+static void pro_boot_schedule(void)
+{
+	if (g_usb_configured) {
+		k_work_reschedule(&g_to_rf_work, K_MSEC(PRO_RF_SETTLE_MS));
+	} else if (g_usb_bus_seen) {
+		k_work_reschedule(&g_to_rf_work, K_SECONDS(PRO_RF_DELAY_S));
+	} else {
+		k_work_reschedule(&g_to_rf_work, K_MSEC(PRO_RF_NOHOST_MS));
+	}
+}
+
+void switch2_usb_event(uint8_t type)
+{
+	if (type == USBD_MSG_RESET && !g_usb_bus_seen) {
+		g_usb_bus_seen = true;
+		if (g_pro_boot_pending) {
+			pro_boot_schedule();
+		}
+	} else if (type == USBD_MSG_CONFIGURATION && !g_usb_configured) {
+		g_usb_configured = true;
+		if (g_pro_boot_pending) {
+			pro_boot_schedule();
+		}
+	}
+}
 
 static bool g_wake_active;	/* a macro-driven wake is in flight */
 
@@ -1023,10 +1085,36 @@ void switch2_request_register(void)
 	k_work_schedule(&g_register_work, K_NO_WAIT);
 }
 
-/* The chime has finished and its last stop has left: now take the radio. */
+/* The tick has finished and its last stop has left: now take the radio. */
 static void wake_chime_done(void)
 {
 	k_work_schedule(&g_wake_work, K_NO_WAIT);
+}
+
+/*
+ * WAKE SOUNDS, split in two so neither delays the wake by more than it must.
+ *
+ * The full wake chime used to play before the handover, because nothing
+ * reaches the controller once BLE has the radio, and it held the wake back by
+ * its whole length, about 0.6 s. Now a single short tick answers the hold
+ * straight away, and the chime plays once the wake has completed and the
+ * controller is answering on RF again. It then means "the console is awake and
+ * the controller works", which is the moment worth announcing. A wake that
+ * gives up plays no chime, so silence after the tick means it failed.
+ */
+static const struct puck_chime WAKE_TICK = {
+	.version = PUCK_CHIME_VERSION,
+	.count = 1,
+	.notes = { { .hz = 1109, .ms = 60, .haptic = PUCK_CHIME_CHANNEL_DEFAULT } },
+};
+
+static atomic_t g_return_chime;	/* play the wake chime when RF is back */
+
+void switch2_wake_returned(int slot)
+{
+	if (atomic_cas(&g_return_chime, 1, 0)) {
+		puck_melody_play_wake(slot, NULL);
+	}
 }
 
 void switch2_request_wake(int slot)
@@ -1050,13 +1138,18 @@ void switch2_request_wake(int slot)
 		return;
 	}
 
+	wake_timing_start();
+
 	/*
-	 * The chime plays BEFORE the handover, because once BLE has the radio
-	 * nothing reaches the controller until the wake is over. So it delays
-	 * the wake by its own length, about half a second, and it is the
-	 * chime that schedules the wake once its last stop has left.
+	 * The tick plays BEFORE the handover, because once BLE has the radio
+	 * nothing reaches the controller until the wake is over. It is about
+	 * 110 ms including its stop, and it schedules the wake once its last
+	 * stop has left. See WAKE_TICK.
 	 */
-	if (g_cfg.wake_sound && puck_melody_play_wake(slot, wake_chime_done) == 0) {
+	atomic_set(&g_return_chime, 0);
+	if (g_cfg.wake_sound &&
+	    puck_melody_play(slot, &WAKE_TICK, puck_chime_gain(),
+			     wake_chime_done) == 0) {
 		return;
 	}
 
@@ -1075,24 +1168,33 @@ void switch2_wake_complete(void)
 
 	g_silent = true;
 
-	if (g_conn) {
-		printk("  releasing the link -> %d\n",
-		       bt_conn_disconnect(g_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN));
-	}
 	if (g_wake_active) {
 		/*
 		 * The macro drove this wake, so the job is done: give the radio
 		 * back and go on being a controller. This hand-off is the shape
 		 * of the whole product. BLE is a visit, not a home. A puck
 		 * left on BLE is a Steam Controller that has stopped working.
+		 *
+		 * Straight away, not after a fixed 2 s. to_rf_work_fn() asks for
+		 * the disconnect itself and then waits, in 20 ms steps bounded
+		 * by RF_HANDOVER_WAIT_MS, until the host has released the
+		 * connection, so the handover happens as soon as the link is
+		 * actually gone.
 		 */
 		g_wake_active = false;
 		k_work_cancel_delayable(&g_wake_timeout_work);
+		wake_timing_mark(WT_RELEASE);
+		atomic_set(&g_return_chime, g_cfg.wake_sound ? 1 : 0);
 		printk("  wake done: handing the radio back to RF\n");
-		k_work_schedule(&g_to_rf_work, K_SECONDS(2));
-	} else {
-		printk("  going off air; press 'x' to advertise again\n");
+		request_rf_mode();
+		return;
 	}
+
+	if (g_conn) {
+		printk("  releasing the link -> %d\n",
+		       bt_conn_disconnect(g_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN));
+	}
+	printk("  going off air; press 'x' to advertise again\n");
 }
 
 void switch2_registration_complete(void)
@@ -1300,6 +1402,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	}
 
 	g_conn = bt_conn_ref(conn);
+	wake_timing_mark(WT_CONNECTED);
 	switch2_gatt_connected(conn);
 
 	LOG_INF("*** CONNECTED ***");
@@ -1368,10 +1471,13 @@ static bool param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 static void security_changed(struct bt_conn *conn, bt_security_t level,
 			     enum bt_security_err err)
 {
-	ARG_UNUSED(conn);
-
 	printk("\n*** SECURITY level=%d err=%d %s ***\n", (int)level, (int)err,
 	       err ? "<<< ENCRYPTION FAILED" : "(link is encrypted)");
+
+	if (!err) {
+		wake_timing_mark(WT_ENCRYPTED);
+		switch2_gatt_encrypted(conn);
+	}
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -1392,6 +1498,7 @@ int main(void)
 	 * reaches a terminal, because USB is not up yet.
 	 */
 	switch2_store_init();
+	boot_record_init();
 	puck_trace_boot_report();
 	puck_trace_stage(TR_STORE);
 	puck_settings_init();
@@ -1431,7 +1538,20 @@ int main(void)
 	 * and the log thread is held for 4 s, so the backlog overflows and the
 	 * first failure on air is thrown away with it, HCI warnings included.
 	 * Waiting puts every line of it on screen.
+	 *
+	 * The radio decision is made before the wait, and a Pro Controller
+	 * hands over to RF without waiting for it: see PRO_RF_SETTLE_MS. The
+	 * wait is for a PC terminal, and a console has none. The lines that
+	 * explain the decision are printed after it.
 	 */
+	g_have_host = switch2_store_load_host(g_console_mac);
+	g_repair_req = switch2_store_take_repair();
+	g_pairing = g_repair_req;
+	if (!g_repair_req && puck_usb_needs_rf()) {
+		g_pro_boot_pending = true;
+		pro_boot_schedule();
+	}
+
 	k_sleep(K_SECONDS(8));
 	printk("\n--- console up; starting the radio in %s mode ---\n",
 	       g_pairing ? "PAIRING" : "WAKE");
@@ -1446,9 +1566,11 @@ int main(void)
 	 */
 	switch2_gatt_dump();
 	switch2_gatt_check();
+	wake_timing_dump();
 
-	/* Which console to invite, if any. Empty until a registration. */
-	g_have_host = switch2_store_load_host(g_console_mac);
+	/* Which console to invite, if any. Empty until a registration.
+	 * Loaded before the boot wait above.
+	 */
 
 	/*
 	 * WHICH RADIO OWNS THE BOOT: RF, unless registration was asked for.
@@ -1467,8 +1589,6 @@ int main(void)
 	 * the next boot acts on it in either USB mode. Bonding a controller and
 	 * registering a console are then independent, in whichever order suits.
 	 */
-	g_repair_req = switch2_store_take_repair();
-	g_pairing = g_repair_req;
 	if (g_repair_req) {
 		printk("registration requested: PAIRING mode "
 		       "(register from Change Grip/Order)\n");
@@ -1522,9 +1642,9 @@ int main(void)
 		 * semaphore timeout period has expired". Deferred like every
 		 * other mode transition, so USB finishes coming up first.
 		 */
-		printk("USB mode is PRO CONTROLLER: handing to RF in %d s\n",
-		       PRO_RF_DELAY_S);
-		k_work_schedule(&g_to_rf_work, K_SECONDS(PRO_RF_DELAY_S));
+		printk("USB mode is PRO CONTROLLER: radio to RF %s "
+		       "(scheduled before the boot wait)\n",
+		       g_mode == MODE_RF ? "done" : "pending");
 	} else {
 		enter_rf_mode();
 	}

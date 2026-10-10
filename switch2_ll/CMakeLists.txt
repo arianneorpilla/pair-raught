@@ -10,7 +10,7 @@ target_sources(app PRIVATE src/main.c src/switch2_gatt.c src/switch2_memory.c
                           src/switch_pro_usb.c src/puck_trace.c
                           src/puck_settings.c
                           src/puck_rumble.c src/puck_webdisk.c
-                          src/puck_melody.c)
+                          src/puck_melody.c src/puck_wake_timing.c)
 
 # The console's LL_ENC_REQ carries EDIV=0/Rand=0 -- an out-of-band key agreed
 # over GATT, not via SMP -- so the derived LTK has to be pushed straight into

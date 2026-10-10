@@ -578,3 +578,45 @@ bool switch2_store_load_chime(int id, void *chime, size_t len)
 	}
 	return nvs_read(&fs, NVS_ID_CHIME_BASE + id, chime, len) == (ssize_t)len;
 }
+
+/*
+ * The last wake's timing (see puck_wake_timing.c). Written once per wake, after
+ * the radio is back on RF. Length-checked on read like the settings record.
+ * 32 is the first id after the four chime ids.
+ */
+#define NVS_ID_WAKE_TIMING 32
+
+int switch2_store_save_wake_timing(const void *rec, size_t len)
+{
+	if (!g_mounted) {
+		return -EIO;
+	}
+	return nvs_write(&fs, NVS_ID_WAKE_TIMING, rec, len) < 0 ? -EIO : 0;
+}
+
+bool switch2_store_load_wake_timing(void *rec, size_t len)
+{
+	if (!g_mounted) {
+		return false;
+	}
+	return nvs_read(&fs, NVS_ID_WAKE_TIMING, rec, len) == (ssize_t)len;
+}
+
+/* The boot records (see puck_wake_timing.c). A few writes per boot. */
+#define NVS_ID_BOOT_RECORDS 33
+
+int switch2_store_save_boot_records(const void *rec, size_t len)
+{
+	if (!g_mounted) {
+		return -EIO;
+	}
+	return nvs_write(&fs, NVS_ID_BOOT_RECORDS, rec, len) < 0 ? -EIO : 0;
+}
+
+bool switch2_store_load_boot_records(void *rec, size_t len)
+{
+	if (!g_mounted) {
+		return false;
+	}
+	return nvs_read(&fs, NVS_ID_BOOT_RECORDS, rec, len) == (ssize_t)len;
+}

@@ -20,6 +20,8 @@
 #include <zephyr/usb/usb_ch9.h>
 
 #include "puck_usb.h"
+#include "puck_wake_timing.h"
+#include "switch2_gatt.h"
 #include "switch2_store.h"
 #include "puck_webdisk.h"
 #include "puck_hid.h"
@@ -74,6 +76,22 @@ static bool g_has_dongle;
 static bool g_has_mouse;
 static uint8_t g_mode_now;
 static uint8_t g_prev_mode = 0xFF;
+
+/*
+ * USB device messages, delivered on the system workqueue
+ * (CONFIG_USBD_MSG_DEFERRED_MODE). Suspend, resume and configuration are how
+ * the puck can tell whether the console is awake.
+ */
+static void usb_msg_cb(struct usbd_context *const ctx,
+		       const struct usbd_msg *const msg)
+{
+	ARG_UNUSED(ctx);
+
+	if (msg->type <= USBD_MSG_CONFIGURATION) {
+		boot_record_event((uint8_t)msg->type);
+		switch2_usb_event((uint8_t)msg->type);
+	}
+}
 
 /*
  * Assemble whichever device this puck is meant to be.
@@ -260,6 +278,12 @@ int puck_usb_init(void)
 	err = usbd_register_class(&puck_usbd, "cdc_acm_0", USBD_SPEED_FS, 1);
 	if (err) {
 		printk("usb: registering the CDC console FAILED (%d)\n", err);
+	}
+
+	/* Bus events, for the boot record and the Pro boot handover. */
+	err = usbd_msg_register_cb(&puck_usbd, usb_msg_cb);
+	if (err) {
+		printk("usb: message callback not registered (%d)\n", err);
 	}
 
 	err = usbd_init(&puck_usbd);

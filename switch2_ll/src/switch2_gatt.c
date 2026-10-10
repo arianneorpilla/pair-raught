@@ -47,6 +47,7 @@
 #include "switch2_memory.h"
 #include "switch2_store.h"
 #include "puck_settings.h"
+#include "puck_wake_timing.h"
 
 /* ---- UUIDs, byte-identical to BleSwitch2Poc.ino ------------------------- */
 
@@ -230,6 +231,17 @@ static void hexdump(const char *tag, uint16_t handle, const void *buf, uint16_t 
 
 /* Defined with the report stream below; the stream trigger lands in wr(). */
 static void stream_start(struct bt_conn *conn);
+
+/*
+ * When the link was encrypted and when the console last wrote anything, both
+ * 0 until they happen. A reconnecting console that is going to re-run the
+ * handshake does so straight after encryption, and writes while it does. One
+ * that has gone quiet after encryption is waiting for reports.
+ */
+static uint32_t g_secure_ms;
+static uint32_t g_last_write_ms;
+#define RECONNECT_QUIET_MS 300
+
 static void force_report_ccc(struct bt_conn *conn);
 
 static ssize_t rd(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -256,6 +268,8 @@ static ssize_t wr(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	struct switch2_val *v = attr->user_data;
 	uint16_t handle = bt_gatt_attr_get_handle(attr);
 
+	g_last_write_ms = k_uptime_get_32();
+	wake_timing_write(handle);
 	hexdump("ATT WRITE", handle, buf, len);
 
 	if (handle == switch2_gatt_trigger_handle()) {
@@ -796,12 +810,24 @@ void switch2_gatt_cycle_unlock_button(void)
 
 static uint8_t g_unlock_left;
 static uint16_t g_unlock_tick;
+static uint16_t g_unlock_done_at;	/* tick after which the link is released */
 
 void switch2_gatt_begin_unlock(void)
 {
 	g_press_mode = PRESS_UNLOCK;
 	g_unlock_left = g_cfg.unlock_enabled ? UNLOCK_PRESSES : 0;
 	g_unlock_tick = 0;
+
+	/*
+	 * With unlock off there are no presses to wait for, so the link is held
+	 * for the settle time alone. Previously this still waited out the
+	 * delay and every press slot, about 5.5 s at the defaults, with nothing
+	 * being pressed.
+	 */
+	g_unlock_done_at = g_cfg.unlock_enabled
+		? UNLOCK_DELAY + UNLOCK_PRESSES * (UNLOCK_DOWN + UNLOCK_UP) +
+			  UNLOCK_SETTLE
+		: UNLOCK_SETTLE;
 
 	if (g_cfg.unlock_enabled) {
 		printk("\n*** UNLOCK: pressing %u times to clear the lock "
@@ -967,6 +993,14 @@ static void build_report(uint8_t *report, uint16_t ts_next, uint16_t ts_step)
 	 */
 }
 
+static bool reconnect_quiet(void)
+{
+	uint32_t now = k_uptime_get_32();
+	uint32_t since = MAX(g_secure_ms, g_last_write_ms);
+
+	return g_secure_ms && (now - since) > RECONNECT_QUIET_MS;
+}
+
 /*
  * Stream at ~30 ms.
  *
@@ -986,13 +1020,17 @@ static void report_thread(void *a, void *b, void *c)
 		int err;
 
 		if (!g_streaming && g_reconnect_stream && g_stream_conn &&
-		    (k_uptime_get() - g_conn_at) > 1500) {
+		    ((k_uptime_get() - g_conn_at) > 1500 || reconnect_quiet())) {
 			/* A registered console that reconnects does not always
 			 * re-run the handshake or re-arm anything. It just
 			 * waits for reports. Give it 1.5 s to speak first (a
 			 * reconnect that DOES re-handshake will have started
 			 * the stream through the normal trigger by then), then
 			 * open the stream from this side.
+			 *
+			 * Or sooner: once the link is encrypted and the console
+			 * has written nothing for RECONNECT_QUIET_MS, it is not
+			 * handshaking, so there is nothing to wait for.
 			 */
 			printk("\n  reconnect: console has not asked, opening the "
 			       "stream ourselves\n");
@@ -1001,7 +1039,10 @@ static void report_thread(void *a, void *b, void *c)
 		}
 
 		if (!g_streaming || !g_stream_conn) {
-			k_sleep(K_MSEC(50));
+			/* 10 ms while a console is connected, so the stream opens
+			 * close to when it is due rather than up to 50 ms later.
+			 */
+			k_sleep(g_stream_conn ? K_MSEC(10) : K_MSEC(50));
 			continue;
 		}
 
@@ -1038,7 +1079,8 @@ static void report_thread(void *a, void *b, void *c)
 		if (g_press_mode == PRESS_UNLOCK) {
 			g_unlock_tick++;
 
-			if (g_unlock_tick == UNLOCK_DELAY) {
+			if (g_unlock_tick == UNLOCK_DELAY && g_unlock_left > 0) {
+				wake_timing_mark(WT_UNLOCK);
 				printk("  lock screen should be up: pressing now\n");
 			}
 
@@ -1052,9 +1094,7 @@ static void report_thread(void *a, void *b, void *c)
 					       UNLOCK_PRESSES);
 				}
 			} else if (g_unlock_left == 0 &&
-				   g_unlock_tick > UNLOCK_DELAY +
-					   UNLOCK_PRESSES * (UNLOCK_DOWN + UNLOCK_UP) +
-					   UNLOCK_SETTLE) {
+				   g_unlock_tick > g_unlock_done_at) {
 				/*
 				 * Settled. Now hand back. The puck must NOT
 				 * sit here holding a link, or the console can
@@ -1120,6 +1160,7 @@ static void stream_start(struct bt_conn *conn)
 	g_streaming = true;
 	printk("  *** REPORT STREAM STARTED (notifying from 0x%04X) ***\n",
 	       switch2_gatt_report_handle());
+	wake_timing_mark(WT_STREAM);
 
 	/* If this connection came from a wake request, the console is now
 	 * showing its lock screen and is waiting for button presses. Start them
@@ -1163,6 +1204,7 @@ void switch2_gatt_disconnected(void)
 	g_streaming = false;
 	g_stream_conn = NULL;
 	g_reconnect_stream = false;
+	g_secure_ms = 0;
 
 	/*
 	 * THE LINK KEY DELIBERATELY SURVIVES. Do not clear it here. Once the
@@ -1173,6 +1215,12 @@ void switch2_gatt_disconnected(void)
 	 * a reflash the console's registration is stale and the address must be
 	 * bumped instead. See puck_addr().
 	 */
+}
+
+void switch2_gatt_encrypted(struct bt_conn *conn)
+{
+	ARG_UNUSED(conn);
+	g_secure_ms = k_uptime_get_32();
 }
 
 /*
@@ -1188,6 +1236,8 @@ void switch2_gatt_disconnected(void)
 void switch2_gatt_connected(struct bt_conn *conn)
 {
 	g_conn_at = k_uptime_get();
+	g_secure_ms = 0;
+	g_last_write_ms = 0;
 	g_stream_conn = conn;
 
 	if (!g_have_link_key) {
@@ -1341,6 +1391,7 @@ static void ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
 	uint16_t handle = bt_gatt_attr_get_handle(attr);
 
+	wake_timing_write(handle);
 	printk("CCCD handle=0x%04X -> 0x%04x  (%s)\n", handle, value,
 	       value == BT_GATT_CCC_NOTIFY ? "NOTIFY ARMED" : "off");
 
@@ -1381,6 +1432,18 @@ static void ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 			       g_report_seq, g_imu_ts12);
 			g_reconnect_stream = false;
 			g_streaming = true;
+
+			/* A wake must start its unlock however the stream
+			 * opened. stream_start() returns early once streaming,
+			 * so a console that arms this CCCD before writing the
+			 * trigger would otherwise leave the wake waiting out
+			 * wake.give_up_s.
+			 */
+			if (g_wake_pending) {
+				g_wake_pending = false;
+				wake_timing_mark(WT_STREAM);
+				switch2_gatt_begin_unlock();
+			}
 		}
 	} else if (g_streaming) {
 		printk("  console unsubscribed the report channel: pausing "

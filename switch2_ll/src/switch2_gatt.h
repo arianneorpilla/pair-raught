@@ -107,6 +107,12 @@ void switch2_gatt_radio_release(void);
 struct bt_conn;
 void switch2_gatt_connected(struct bt_conn *conn);
 
+/* The link is encrypted. Call from the security_changed callback. A console
+ * reconnecting to wake the puck's owner may then just wait for reports, and
+ * this lets the stream open as soon as it has gone quiet.
+ */
+void switch2_gatt_encrypted(struct bt_conn *conn);
+
 /*
  * Registration is complete, switch the advertisement to WAKE mode.
  *
@@ -162,6 +168,17 @@ void switch2_gatt_set_wake_pending(bool on);
  * the moment BLE hands back to RF.
  */
 void switch2_wake_complete(void);
+
+/*
+ * A USB device message (usbd_msg_type) from puck_usb.c, on the system
+ * workqueue. Pro Controller mode hands the radio to RF on these at boot.
+ */
+void switch2_usb_event(uint8_t type);
+
+/* A controller answered on RF. Plays the wake chime once after a completed
+ * wake. Cheap when there is nothing to play, so the RF poll calls it freely.
+ */
+void switch2_wake_returned(int slot);
 
 /*
  * Ask for a sleeping console to be woken. Held QAM triggers it.

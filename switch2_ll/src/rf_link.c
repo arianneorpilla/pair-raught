@@ -35,6 +35,7 @@
 #include "rf_link.h"
 #include "rf_radio.h"
 #include "puck_usb.h"
+#include "puck_wake_timing.h"
 #include "puck_hid.h"
 #include "puck_input.h"
 #include "switch2_gatt.h"
@@ -60,6 +61,18 @@ static const uint8_t RF_PAIR_BASE[4] = { 0x69, 0x62, 0x65, 0x78 };
 
 /* How often to probe a slot that is not answering. See rf_link_task(). */
 #define RF_DARK_PROBE_MS 100u
+
+/*
+ * Reacquire window. For this long after RF takes the radio (boot, or coming
+ * back from a wake), while no slot is answering yet, dark slots are polled on
+ * every pass and beaconed every RF_BOOST_BEACON_MS instead of 250 ms. The
+ * throttle below exists to protect a LIVE slot from a stale bond's airtime,
+ * and with nothing live yet there is nothing to protect. The controller was
+ * dropped for the length of the wake, so this is exactly when it is looking.
+ */
+#define RF_BOOST_MS        3000u
+#define RF_BOOST_BEACON_MS 50u
+static uint32_t g_boost_until;
 
 static uint8_t g_sess_base[PUCK_HID_SLOTS][4];
 static uint8_t g_sess_prefix[PUCK_HID_SLOTS];
@@ -783,6 +796,8 @@ static uint8_t rf_poll_slot(int slot)
 
 			if (rtype >= 0xF0) {
 				puck_trace_stage(TR_RF_LIVE);
+				wake_timing_mark(WT_RF_LIVE);
+				switch2_wake_returned(slot);
 				g_link_ms[slot] = k_uptime_get_32();
 				g_replies++;
 				if (rtype == 0xF1) {
@@ -821,6 +836,7 @@ void rf_link_set_active(bool active)
 	if (active) {
 		g_beacons = 0;
 		g_replies = 0;
+		g_boost_until = k_uptime_get_32() + RF_BOOST_MS;
 	}
 }
 
@@ -829,8 +845,18 @@ void rf_link_task(void)
 	static uint32_t last_report;
 	uint32_t now = k_uptime_get_32();
 
+	bool boost;
+
 	if (!g_active) {
 		return;
+	}
+
+	/* See RF_BOOST_MS. */
+	boost = (int32_t)(g_boost_until - now) > 0;
+	for (int s = 0; boost && s < PUCK_HID_SLOTS; s++) {
+		if (puck_hid_bond(s) && rf_link_slot_live(s)) {
+			boost = false;
+		}
 	}
 
 	for (int s = 0; s < PUCK_HID_SLOTS; s++) {
@@ -854,7 +880,7 @@ void rf_link_task(void)
 		 * So a slot silent for a while gets probed a few times a second
 		 * instead. A live slot is never throttled.
 		 */
-		if (!live && (now - g_probe_ms[s]) < RF_DARK_PROBE_MS) {
+		if (!live && !boost && (now - g_probe_ms[s]) < RF_DARK_PROBE_MS) {
 			continue;
 		}
 		if (!live) {
@@ -868,7 +894,8 @@ void rf_link_task(void)
 		 * dark: once it answers polls, the beacon is pure airtime and a
 		 * hop to channel 2 and back.
 		 */
-		if (!rf_link_slot_live(s) && (now - g_beacon_ms[s]) >= 250u) {
+		if (!rf_link_slot_live(s) &&
+		    (now - g_beacon_ms[s]) >= (boost ? RF_BOOST_BEACON_MS : 250u)) {
 			g_beacon_ms[s] = now;
 			rf_link_beacon(s, true);
 		}
